@@ -1,0 +1,528 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Multi-Region LLM Gateway</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans+Condensed:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+/* Layout: one wide engineering drawing up top, then reference tables an on-call engineer scans. */
+:root{
+  --bg:#f4f5f7; --surface:#ffffff; --ink:#161a21; --muted:#5a6370; --line:#c6ccd6;
+  --region:#eaedf2; --rl:#b45309; --rl-ink:#ffffff; --ext:#1d4ed8; --key:#161a21; --mesh:#0f766e;
+  --f-display:"IBM Plex Sans",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,sans-serif;
+  --f-cond:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0f1217; --surface:#171b22; --ink:#e5e8ed; --muted:#97a0ad; --line:#353c48;
+    --region:#13171d; --rl:#f59e0b; --rl-ink:#1a1206; --ext:#7ea6ff; --key:#e5e8ed; --mesh:#2dd4bf;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0f1217; --surface:#171b22; --ink:#e5e8ed; --muted:#97a0ad; --line:#353c48;
+  --region:#13171d; --rl:#f59e0b; --rl-ink:#1a1206; --ext:#7ea6ff; --key:#e5e8ed; --mesh:#2dd4bf;
+}
+body{background:var(--bg);color:var(--ink);font:15px/1.6 var(--f-body);padding-inline:20px;padding-block:32px 64px}
+.wrap{max-width:1560px;margin:0 auto;display:grid;gap:40px}
+header{max-width:72ch;display:grid;gap:8px}
+.eyebrow{font:500 12px var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font:600 clamp(26px,3.4vw,36px)/1.15 var(--f-display);margin:0;text-wrap:balance}
+h2{font:600 20px/1.3 var(--f-display);margin:0 0 12px;text-wrap:balance}
+p{margin:0}
+.lede{color:var(--muted)}
+figure{margin:0;display:grid;gap:12px}
+.scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px}
+svg{display:block;width:100%;min-width:1150px;height:auto;color:var(--ink)}
+figcaption{color:var(--muted);font-size:14px;max-width:90ch}
+.legend{display:flex;flex-wrap:wrap;gap:8px 24px;font-size:13px;color:var(--muted);align-items:center}
+.legend > span{display:inline-flex;gap:8px;align-items:center}
+.dot{width:18px;height:18px;border-radius:50%;background:var(--rl);color:var(--rl-ink);font:600 10px/18px var(--f-cond);text-align:center}
+.sw{width:22px;height:0;border-top:1.5px dashed var(--muted)}
+.sw.ext{border:1.5px solid var(--ext);height:12px;border-radius:3px;width:18px}
+.sw.key{border:2px solid var(--key);height:12px;border-radius:3px;width:18px}
+/* svg classes */
+.bx{fill:var(--surface);stroke:var(--line);stroke-width:1.2}
+.bx.key{stroke:var(--key);stroke-width:2}
+.bx.ext{stroke:var(--ext);stroke-width:1.6}
+.region{fill:var(--region);stroke:var(--muted);stroke-dasharray:6 4;stroke-width:1.2}
+.vpc{fill:none;stroke:var(--line);stroke-width:1.2}
+.mesh{fill:none;stroke:var(--mesh);stroke-dasharray:4 3;stroke-width:1.4}
+.mesh-t{fill:var(--mesh)}
+.edge.dns{stroke-dasharray:5 4}
+.sw.dns{border-top:1.5px dashed var(--ink)}
+.sw.mesh{border-top:1.5px dashed var(--mesh)}
+pre{margin:0;overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;font:500 12px/1.55 var(--f-mono);tab-size:2}
+pre code{background:none;padding:0;font:inherit}
+.snip{display:grid;gap:8px;min-width:0}
+.snip h3{font:600 15px/1.3 var(--f-display);margin:0}
+.snip p{font-size:14px;color:var(--muted)}
+.t{font:600 13px var(--f-cond);fill:var(--ink)}
+.s{font:400 11px var(--f-cond);fill:var(--muted)}
+.lbl{font:400 10.5px var(--f-cond);fill:var(--muted)}
+.rname{font:500 11px var(--f-mono);letter-spacing:.06em;text-transform:uppercase;fill:var(--ink)}
+.edge{fill:none;stroke:currentColor;stroke-width:1.4}
+.edge.rep{stroke:var(--muted);stroke-dasharray:3 3}
+.badge{fill:var(--rl)}
+.bt{font:600 10px var(--f-cond);fill:var(--rl-ink)}
+/* sections */
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr));gap:40px}
+section{min-width:0}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.45}
+th{font:500 11px var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;padding:8px 12px 8px 0;border-bottom:1px solid var(--line)}
+td{padding:10px 12px 10px 0;border-bottom:1px solid var(--line);vertical-align:top}
+td:first-child{white-space:nowrap;font-weight:600}
+code{font:500 12.5px var(--f-mono);background:var(--region);padding:1px 5px;border-radius:4px}
+ol,ul{margin:0;padding-left:1.3em;display:grid;gap:6px;max-width:75ch}
+.note{font-size:14px;color:var(--muted);max-width:80ch;margin-top:12px}
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">Reference architecture · corporate-only · AWS + Istio</div>
+  <h1>Multi-Region LLM Gateway</h1>
+  <p class="lede">One OpenAI-compatible API for corporate teams in front of Amazon Bedrock, Azure OpenAI and a self-hosted SLM. A public NLB admits only corporate egress IPs and hands traffic to an internal ALB with TLS and AWS WAF. Istio handles authentication, request rate limits and egress in two active AWS regions, and the gateway enforces token budgets and falls back between providers.</p>
+</header>
+<figure>
+<div class="scroll">
+<svg viewBox="0 0 1540 950" role="img" aria-label="Corporate clients resolve a public Route 53 zone whose health-checked latency alias records point at each regional public NLB, then call it over HTTPS from allowlisted corporate egress IPs. In each region the public NLB forwards to an internal ALB that terminates TLS and runs AWS WAF, which feeds an Istio ingress gateway that authenticates JWTs and applies a local rate limit, then checks a global ratelimit service backed by Valkey. LLM gateway pods on EKS enforce token budgets and route to Amazon Bedrock over PrivateLink, a vLLM small language model on GPU nodes, or Azure OpenAI through an Istio egress gateway and NAT. DynamoDB global tables, replicated secrets and S3 replication tie the regions together.">
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+<text class="rname" x="20" y="96">Corporate network</text>
+<rect class="bx" x="20" y="110" width="200" height="60" rx="6"/>
+<text class="t" x="32" y="132">Corporate clients</text>
+<text class="s" x="32" y="148">via corp egress IPs</text>
+<path class="edge" d="M120,170 V438" marker-end="url(#ah)"/>
+<text class="lbl" x="128" y="300" text-anchor="start">1 · resolve api.llm.acme.com</text>
+<rect class="bx" x="20" y="440" width="200" height="84" rx="6"/>
+<text class="t" x="32" y="462">Route 53 public zone</text>
+<text class="s" x="32" y="478">latency alias → each NLB</text>
+<text class="s" x="32" y="493">alarm-based health checks</text>
+<path class="edge" d="M220,128 H266 V208"/>
+<path class="edge" d="M266,208 H312" marker-end="url(#ah)"/>
+<path class="edge" d="M266,208 V638 H312" marker-end="url(#ah)"/>
+<text class="lbl" x="226" y="121" text-anchor="start">2 · HTTPS</text>
+<path class="edge dns" d="M220,482 H246 V228"/>
+<path class="edge dns" d="M246,228 H312" marker-end="url(#ah)"/>
+<path class="edge dns" d="M246,482 V658 H312" marker-end="url(#ah)"/>
+<text class="lbl" x="224" y="475" text-anchor="start">alias</text>
+<g transform="translate(290 90)">
+<rect class="region" x="0" y="0" width="1000" height="320" rx="10"/>
+<text class="rname" x="16" y="26">us-east-1 · active</text>
+<rect class="vpc" x="16" y="40" width="754" height="268" rx="8"/>
+<text class="lbl" x="28" y="57">VPC · 3 AZs</text>
+<rect class="mesh" x="150" y="64" width="490" height="236" rx="8"/>
+<text class="lbl mesh-t" x="162" y="81">EKS cluster · Istio mesh</text>
+<rect class="bx" x="24" y="96" width="116" height="48" rx="6"/>
+<text class="t" x="36" y="118">Public NLB</text>
+<text class="s" x="36" y="134">corp IPs only</text>
+<path class="edge" d="M82,144 V152" marker-end="url(#ah)"/>
+<rect class="bx" x="24" y="154" width="116" height="48" rx="6"/>
+<text class="t" x="36" y="176">Internal ALB</text>
+<text class="s" x="36" y="192">TLS · WAF</text>
+<path class="edge" d="M140,178 H152 V128 H164" marker-end="url(#ah)"/>
+<rect class="bx" x="166" y="92" width="130" height="72" rx="6"/>
+<text class="t" x="178" y="114">Istio ingress gw</text>
+<text class="s" x="178" y="130">JWT authn + authz</text>
+<text class="s" x="178" y="145">local rate limit</text>
+<path class="edge" d="M231,164 V194" marker-end="url(#ah)"/>
+<text class="lbl" x="238" y="183" text-anchor="start">gRPC check</text>
+<rect class="bx" x="166" y="196" width="130" height="64" rx="6"/>
+<text class="t" x="178" y="218">ratelimit service</text>
+<text class="s" x="178" y="234">envoyproxy/ratelimit</text>
+<rect class="bx" x="28" y="210" width="110" height="64" rx="6"/>
+<text class="t" x="40" y="232">ElastiCache</text>
+<text class="s" x="40" y="248">Valkey counters</text>
+<path class="edge" d="M166,236 H140" marker-end="url(#ah)"/>
+<path class="edge" d="M296,128 H328" marker-end="url(#ah)"/>
+<rect class="bx key" x="330" y="92" width="170" height="120" rx="6"/>
+<text class="t" x="342" y="114">LLM gateway pods</text>
+<text class="s" x="342" y="130">EKS · Envoy sidecar</text>
+<text class="s" x="342" y="145">TPM token bucket</text>
+<text class="s" x="342" y="160">model router + fallback</text>
+<text class="s" x="342" y="175">SSE streaming</text>
+<path class="edge" d="M330,190 H312 V292 H83 V276" marker-end="url(#ah)"/>
+<text class="lbl" x="200" y="287" text-anchor="middle">TPM counters</text>
+<path class="edge" d="M415,212 V230" marker-end="url(#ah)"/>
+<rect class="bx" x="330" y="232" width="170" height="56" rx="6"/>
+<text class="t" x="342" y="254">Async workers + SQS</text>
+<text class="s" x="342" y="270">spillover · DLQ</text>
+<path class="edge" d="M500,110 H520" marker-end="url(#ah)"/>
+<rect class="bx" x="522" y="92" width="110" height="56" rx="6"/>
+<text class="t" x="534" y="114">Istio egress</text>
+<text class="s" x="534" y="130">TLS origination</text>
+<path class="edge" d="M500,190 H520" marker-end="url(#ah)"/>
+<rect class="bx" x="522" y="170" width="110" height="90" rx="6"/>
+<text class="t" x="534" y="192">vLLM SLM</text>
+<text class="s" x="534" y="208">GPU node pool</text>
+<text class="s" x="534" y="223">Karpenter</text>
+<text class="s" x="534" y="238">outlier detection</text>
+<path class="edge" d="M500,158 H646 V208 H658" marker-end="url(#ah)"/>
+<rect class="bx" x="660" y="92" width="100" height="56" rx="6"/>
+<text class="t" x="672" y="114">NAT Gateway</text>
+<text class="s" x="672" y="130">egress</text>
+<path class="edge" d="M632,120 H658" marker-end="url(#ah)"/>
+<rect class="bx" x="660" y="180" width="100" height="56" rx="6"/>
+<text class="t" x="672" y="202">VPC endpoint</text>
+<text class="s" x="672" y="218">PrivateLink</text>
+<path class="edge" d="M760,208 H798" marker-end="url(#ah)"/>
+<rect class="bx" x="800" y="170" width="180" height="76" rx="6"/>
+<text class="t" x="812" y="192">Amazon Bedrock</text>
+<text class="s" x="812" y="208">cross-region inference</text>
+<path class="edge" d="M760,120 H1000"/>
+<text class="lbl" x="880" y="113" text-anchor="middle">TLS 443 → Azure OpenAI</text>
+<circle class="badge" cx="296" cy="92" r="11"/><text class="bt" x="296" y="96" text-anchor="middle">L1</text>
+<circle class="badge" cx="296" cy="196" r="11"/><text class="bt" x="296" y="200" text-anchor="middle">L2</text>
+<circle class="badge" cx="500" cy="92" r="11"/><text class="bt" x="500" y="96" text-anchor="middle">L3</text>
+<circle class="badge" cx="500" cy="232" r="11"/><text class="bt" x="500" y="236" text-anchor="middle">L4</text>
+</g>
+<g transform="translate(290 520)">
+<rect class="region" x="0" y="0" width="1000" height="320" rx="10"/>
+<text class="rname" x="16" y="26">us-west-2 · active</text>
+<rect class="vpc" x="16" y="40" width="754" height="268" rx="8"/>
+<text class="lbl" x="28" y="57">VPC · 3 AZs</text>
+<rect class="mesh" x="150" y="64" width="490" height="236" rx="8"/>
+<text class="lbl mesh-t" x="162" y="81">EKS cluster · Istio mesh</text>
+<rect class="bx" x="24" y="96" width="116" height="48" rx="6"/>
+<text class="t" x="36" y="118">Public NLB</text>
+<text class="s" x="36" y="134">corp IPs only</text>
+<path class="edge" d="M82,144 V152" marker-end="url(#ah)"/>
+<rect class="bx" x="24" y="154" width="116" height="48" rx="6"/>
+<text class="t" x="36" y="176">Internal ALB</text>
+<text class="s" x="36" y="192">TLS · WAF</text>
+<path class="edge" d="M140,178 H152 V128 H164" marker-end="url(#ah)"/>
+<rect class="bx" x="166" y="92" width="130" height="72" rx="6"/>
+<text class="t" x="178" y="114">Istio ingress gw</text>
+<text class="s" x="178" y="130">JWT authn + authz</text>
+<text class="s" x="178" y="145">local rate limit</text>
+<path class="edge" d="M231,164 V194" marker-end="url(#ah)"/>
+<text class="lbl" x="238" y="183" text-anchor="start">gRPC check</text>
+<rect class="bx" x="166" y="196" width="130" height="64" rx="6"/>
+<text class="t" x="178" y="218">ratelimit service</text>
+<text class="s" x="178" y="234">envoyproxy/ratelimit</text>
+<rect class="bx" x="28" y="210" width="110" height="64" rx="6"/>
+<text class="t" x="40" y="232">ElastiCache</text>
+<text class="s" x="40" y="248">Valkey counters</text>
+<path class="edge" d="M166,236 H140" marker-end="url(#ah)"/>
+<path class="edge" d="M296,128 H328" marker-end="url(#ah)"/>
+<rect class="bx key" x="330" y="92" width="170" height="120" rx="6"/>
+<text class="t" x="342" y="114">LLM gateway pods</text>
+<text class="s" x="342" y="130">EKS · Envoy sidecar</text>
+<text class="s" x="342" y="145">TPM token bucket</text>
+<text class="s" x="342" y="160">model router + fallback</text>
+<text class="s" x="342" y="175">SSE streaming</text>
+<path class="edge" d="M330,190 H312 V292 H83 V276" marker-end="url(#ah)"/>
+<text class="lbl" x="200" y="287" text-anchor="middle">TPM counters</text>
+<path class="edge" d="M415,212 V230" marker-end="url(#ah)"/>
+<rect class="bx" x="330" y="232" width="170" height="56" rx="6"/>
+<text class="t" x="342" y="254">Async workers + SQS</text>
+<text class="s" x="342" y="270">spillover · DLQ</text>
+<path class="edge" d="M500,110 H520" marker-end="url(#ah)"/>
+<rect class="bx" x="522" y="92" width="110" height="56" rx="6"/>
+<text class="t" x="534" y="114">Istio egress</text>
+<text class="s" x="534" y="130">TLS origination</text>
+<path class="edge" d="M500,190 H520" marker-end="url(#ah)"/>
+<rect class="bx" x="522" y="170" width="110" height="90" rx="6"/>
+<text class="t" x="534" y="192">vLLM SLM</text>
+<text class="s" x="534" y="208">GPU node pool</text>
+<text class="s" x="534" y="223">Karpenter</text>
+<text class="s" x="534" y="238">outlier detection</text>
+<path class="edge" d="M500,158 H646 V208 H658" marker-end="url(#ah)"/>
+<rect class="bx" x="660" y="92" width="100" height="56" rx="6"/>
+<text class="t" x="672" y="114">NAT Gateway</text>
+<text class="s" x="672" y="130">egress</text>
+<path class="edge" d="M632,120 H658" marker-end="url(#ah)"/>
+<rect class="bx" x="660" y="180" width="100" height="56" rx="6"/>
+<text class="t" x="672" y="202">VPC endpoint</text>
+<text class="s" x="672" y="218">PrivateLink</text>
+<path class="edge" d="M760,208 H798" marker-end="url(#ah)"/>
+<rect class="bx" x="800" y="170" width="180" height="76" rx="6"/>
+<text class="t" x="812" y="192">Amazon Bedrock</text>
+<text class="s" x="812" y="208">cross-region inference</text>
+<path class="edge" d="M760,120 H1000"/>
+<text class="lbl" x="880" y="113" text-anchor="middle">TLS 443 → Azure OpenAI</text>
+<circle class="badge" cx="296" cy="92" r="11"/><text class="bt" x="296" y="96" text-anchor="middle">L1</text>
+<circle class="badge" cx="296" cy="196" r="11"/><text class="bt" x="296" y="200" text-anchor="middle">L2</text>
+<circle class="badge" cx="500" cy="92" r="11"/><text class="bt" x="500" y="96" text-anchor="middle">L3</text>
+<circle class="badge" cx="500" cy="232" r="11"/><text class="bt" x="500" y="236" text-anchor="middle">L4</text>
+</g>
+<path class="edge rep" d="M480,410 V436"/>
+<path class="edge rep" d="M480,494 V520"/>
+<path class="edge rep" d="M790,410 V436"/>
+<path class="edge rep" d="M790,494 V520"/>
+<path class="edge rep" d="M1100,410 V436"/>
+<path class="edge rep" d="M1100,494 V520"/>
+<rect class="bx" x="330" y="436" width="300" height="58" rx="6"/>
+<text class="t" x="342" y="458">DynamoDB global tables</text>
+<text class="s" x="342" y="474">tenants · quotas · model aliases · usage ledger</text>
+<rect class="bx" x="660" y="436" width="260" height="58" rx="6"/>
+<text class="t" x="672" y="458">Secrets Manager (replicated)</text>
+<text class="s" x="672" y="474">Azure keys · rotation</text>
+<rect class="bx" x="950" y="436" width="300" height="58" rx="6"/>
+<text class="t" x="962" y="458">Firehose → S3 (cross-region repl.)</text>
+<text class="s" x="962" y="474">audit log + token usage → Athena</text>
+<rect class="bx ext" x="1330" y="330" width="190" height="200" rx="6"/>
+<text class="t" x="1342" y="352">Azure OpenAI</text>
+<text class="s" x="1342" y="368">outside AWS</text>
+<text class="s" x="1342" y="383">two Azure regions</text>
+<text class="s" x="1342" y="398">PTU baseline + PAYG burst</text>
+<text class="s" x="1342" y="413">keys from Secrets Manager</text>
+<text class="s" x="1342" y="428">same model aliases</text>
+<path class="edge" d="M1290,210 H1425 V328" marker-end="url(#ah)"/>
+<path class="edge" d="M1290,640 H1425 V532" marker-end="url(#ah)"/>
+<rect class="bx" x="290" y="870" width="1000" height="66" rx="6"/>
+<text class="t" x="302" y="892">Observability, per region</text>
+<text class="s" x="302" y="908">Istio metrics → Amazon Managed Prometheus + Grafana (429s by layer, p99 latency, TPM headroom) · ADOT / X-Ray traces · Kiali</text>
+</svg></div>
+<div class="legend">
+  <span><span class="dot">L1</span>rate-limit layer, in the order a request meets them</span>
+  <span><span class="sw key"></span>the service you build and own</span>
+  <span><span class="sw mesh"></span>Istio mesh boundary</span>
+  <span><span class="sw ext"></span>outside AWS</span>
+  <span><span class="sw dns"></span>DNS answer (alias record)</span>
+  <span><span class="sw"></span>replicated across regions</span>
+</div>
+<figcaption>Both regions serve traffic. The NLB is the only public piece, and its security group admits only corporate egress IPs. Behind it, the internal ALB terminates TLS and runs WAF, and Istio's ingress gateway is the single door into the mesh. It authenticates the caller and enforces request limits before a gateway pod does any work, and all traffic to Azure leaves through one egress gateway.</figcaption>
+</figure>
+
+<section>
+<h2>Request path</h2>
+<ol>
+  <li>The client resolves <code>api.llm.acme.com</code> in the public Route 53 zone. Its latency alias records point at each region's public NLB; a region whose health check fails drops out of the answer.</li>
+  <li>The client connects over HTTPS from a corporate egress IP. The NLB's security group refuses every other source and passes the connection to the internal ALB, which terminates TLS (ACM certificate), applies AWS WAF and re-encrypts to the Istio ingress gateway.</li>
+  <li>The ingress gateway validates the JWT (<code>RequestAuthentication</code>) and checks allowed models (<code>AuthorizationPolicy</code>). It copies the tenant claim into <code>x-tenant-id</code> and applies the per-pod local limit (<b>L1</b>).</li>
+  <li>The ingress gateway asks the ratelimit service for the tenant × model request budget (<b>L2</b>). Over budget returns 429 before any gateway pod runs.</li>
+  <li>A gateway pod reserves tokens (prompt + <code>max_tokens</code>) in Valkey (<b>L3</b>). It then routes the model alias to the first provider with headroom (<b>L4</b>): Bedrock over PrivateLink, vLLM in-mesh, or Azure through the egress gateway.</li>
+  <li>The response streams back over SSE. Actual usage reconciles the bucket and lands in the DynamoDB ledger and the S3 audit log.</li>
+</ol>
+</section>
+
+<div class="cols">
+<section>
+<h2>Rate-limit layers</h2>
+<div class="tbl"><table>
+<thead><tr><th>Layer</th><th>Where</th><th>Keyed on</th><th>When exceeded</th></tr></thead>
+<tbody>
+<tr><td>L1 · local</td><td>Envoy <code>local_ratelimit</code> on each ingress pod</td><td>per pod, optionally per source</td><td>429 immediately, no network hop. Protects pods from bursts.</td></tr>
+<tr><td>L2 · global</td><td>Envoy <code>ratelimit</code> filter → ratelimit service → Valkey</td><td>tenant × model descriptors</td><td>429 with <code>x-envoy-ratelimited</code>. Shared across every ingress pod in the region.</td></tr>
+<tr><td>L3 · tokens</td><td>Gateway pods, Valkey Lua script</td><td>tenant × model, tokens per minute</td><td>429 with <code>Retry-After</code> and <code>x-ratelimit-*</code> headers</td></tr>
+<tr><td>L4 · provider</td><td>Router headroom + Istio <code>DestinationRule</code> pools</td><td>provider × deployment</td><td>Next provider in chain, then SQS for async tenants, then 503</td></tr>
+</tbody></table></div>
+<p class="note">Envoy's rate limiter counts requests, not tokens, so token budgets stay in the gateway pods. If you want tokens enforced in the proxy too, Envoy AI Gateway can read usage from the response, but it adds another control plane. Each region holds its own L2 and L3 counters. A tenant's global quota is split across regions and rebalanced from the DynamoDB ledger.</p>
+</section>
+
+<section>
+<h2>Failure handling</h2>
+<div class="tbl"><table>
+<thead><tr><th>Failure</th><th>Detected by</th><th>Response</th></tr></thead>
+<tbody>
+<tr><td>Region down</td><td>CloudWatch alarm-based Route 53 health check</td><td>The public zone answers with the other region within 1–2 minutes. Each region is sized for full peak.</td></tr>
+<tr><td>AZ or ingress pod lost</td><td>NLB target health</td><td>Ingress pods in other AZs take over. HPA and a PodDisruptionBudget keep capacity.</td></tr>
+<tr><td>ratelimit service down</td><td>gRPC errors at Envoy</td><td><code>failure_mode_deny: false</code> fails open. L1 still caps each pod, and an alarm fires.</td></tr>
+<tr><td>Valkey down</td><td>Connection errors</td><td>L2 fails open as above. Gateway pods fall back to a conservative in-memory token bucket.</td></tr>
+<tr><td>Bedrock 429 / 5xx</td><td>App circuit breaker</td><td>Cross-region inference profile first, then the Azure equivalent of the alias</td></tr>
+<tr><td>Azure outage</td><td>Outlier detection on the egress path</td><td>Second Azure region, then Bedrock</td></tr>
+<tr><td>GPU saturated</td><td>Envoy pool overflow (503), vLLM queue depth</td><td>Router falls back to Bedrock or SQS while Karpenter adds nodes</td></tr>
+</tbody></table></div>
+</section>
+</div>
+
+<section>
+<h2>Istio configuration</h2>
+<p class="note" style="margin-bottom:16px">Trimmed starting points for the ingress gateway in <code>istio-system</code>. Header names, limits and hostnames are examples to replace.</p>
+<div class="cols">
+<div class="snip">
+<h3>L1 · local rate limit</h3>
+<p>Token bucket inside each ingress Envoy. Cheap, and it stays up even when everything else fails.</p>
+<pre><code>apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: ingress-local-ratelimit
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.local_ratelimit
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+          stat_prefix: http_local_rate_limiter
+          token_bucket:
+            max_tokens: 500
+            tokens_per_fill: 500
+            fill_interval: 1s
+          filter_enabled:
+            runtime_key: local_rate_limit_enabled
+            default_value: {numerator: 100, denominator: HUNDRED}
+          filter_enforced:
+            runtime_key: local_rate_limit_enforced
+            default_value: {numerator: 100, denominator: HUNDRED}</code></pre>
+</div>
+<div class="snip">
+<h3>L2 · global rate limit</h3>
+<p>Calls the ratelimit service before routing, and builds the descriptor from the tenant and model headers.</p>
+<pre><code>apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: ingress-global-ratelimit
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+            subFilter:
+              name: envoy.filters.http.router
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.ratelimit
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+          domain: llm-gateway
+          failure_mode_deny: false
+          timeout: 25ms
+          rate_limit_service:
+            transport_api_version: V3
+            grpc_service:
+              envoy_grpc:
+                cluster_name: outbound|8081||ratelimit.ratelimit.svc.cluster.local
+                authority: ratelimit.ratelimit.svc.cluster.local
+  - applyTo: VIRTUAL_HOST
+    match:
+      context: GATEWAY
+      routeConfiguration:
+        vhost:
+          name: "api.llm.acme.com:443"
+          route:
+            action: ANY
+    patch:
+      operation: MERGE
+      value:
+        rate_limits:
+        - actions:
+          - request_headers:
+              header_name: x-tenant-id
+              descriptor_key: tenant
+          - request_headers:
+              header_name: x-model-alias
+              descriptor_key: model</code></pre>
+</div>
+<div class="snip">
+<h3>ratelimit service rules</h3>
+<p>The ConfigMap for <code>envoyproxy/ratelimit</code>. A rule with a specific value overrides the default for that tenant.</p>
+<pre><code>domain: llm-gateway
+descriptors:
+  # default: every tenant, per model alias
+  - key: tenant
+    descriptors:
+      - key: model
+        rate_limit:
+          unit: minute
+          requests_per_unit: 600
+  # tighter limit for one batch-heavy tenant
+  - key: tenant
+    value: batch-analytics
+    descriptors:
+      - key: model
+        rate_limit:
+          unit: minute
+          requests_per_unit: 60</code></pre>
+<h3 style="margin-top:12px">Identity → headers</h3>
+<p>Take the tenant from the verified JWT, never from the client. Strip any incoming <code>x-tenant-id</code> first, then let Istio write it from the claim.</p>
+<pre><code>apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: corp-jwt
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  jwtRules:
+  - issuer: https://idp.corp.example/
+    jwksUri: https://idp.corp.example/.well-known/jwks.json
+    outputClaimToHeaders:
+    - header: x-tenant-id
+      claim: tenant</code></pre>
+</div>
+<div class="snip">
+<h3>L4 · provider pools</h3>
+<p>Connection-pool limits make Envoy shed load to vLLM with a fast 503 instead of a long queue. Outlier detection ejects unhealthy pods.</p>
+<pre><code>apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: vllm
+  namespace: slm
+spec:
+  host: vllm.slm.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      http:
+        http1MaxPendingRequests: 64
+        http2MaxRequests: 256
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50</code></pre>
+<p>Register Azure as an external service. Then route it through the egress gateway with a <code>Gateway</code> and <code>VirtualService</code>, following Istio's egress-gateway pattern.</p>
+<pre><code>apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: azure-openai-eastus2
+spec:
+  hosts: ["your-resource.openai.azure.com"]
+  location: MESH_EXTERNAL
+  resolution: DNS
+  ports:
+  - number: 443
+    name: tls
+    protocol: TLS</code></pre>
+</div>
+</div>
+</section>
+
+<div class="cols">
+<section>
+<h2>Scaling notes</h2>
+<ul>
+  <li>Scale gateway pods on concurrent streams per pod, not CPU. LLM calls are I/O-bound, so CPU stays low while connections pile up.</li>
+  <li>Scale ingress gateways with HPA. Remember that L1 limits are per pod, so the effective cap grows with replica count.</li>
+  <li>The ratelimit service is stateless. Run 3+ replicas across AZs, and keep Valkey in cluster mode with tenant-hashed keys.</li>
+  <li>Istio route timeouts are off by default. Set an explicit per-route timeout and stream idle timeout longer than your longest generation.</li>
+  <li>Buy a baseline of Bedrock provisioned throughput and Azure PTU, and let on-demand and PAYG absorb bursts.</li>
+</ul>
+</section>
+<section>
+<h2>Provisioning without Crossplane</h2>
+<ul>
+  <li>Terraform for the VPC, EKS, ElastiCache, DynamoDB, the public NLB, internal ALB and WAF, the Route 53 zone with ACM certificates, and EKS Pod Identity roles for Bedrock. One region module is applied to both regions.</li>
+  <li>Helm for <code>istio/base</code>, <code>istiod</code>, the ingress and egress <code>gateway</code> charts, ratelimit, vLLM and Karpenter.</li>
+  <li>Istio resources (EnvoyFilters, policies, ServiceEntries) in Git, applied by Argo CD or Flux per cluster.</li>
+  <li>Azure OpenAI deployments through the <code>azurerm</code> Terraform provider in the same repo, so model aliases stay in sync across clouds.</li>
+</ul>
+</section>
+</div>
+</div>
+
+</body></html>
