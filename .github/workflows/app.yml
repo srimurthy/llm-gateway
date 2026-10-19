@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -58,7 +58,7 @@ jobs:
       REGISTRY: 111122223333.dkr.ecr.us-east-1.amazonaws.com
       IMAGE: llm-gateway
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - name: Build (no push) for scanning
         uses: docker/build-push-action@v6
@@ -108,7 +108,7 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Pin the new digest in every region
         env:
           DIGEST: ${{ needs.image.outputs.digest }}
