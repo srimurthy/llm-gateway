@@ -1,0 +1,175 @@
+# Bound to a read-only IAM role for the weights bucket (infra/modules/gateway-iam).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vllm
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  labels:
+    app: vllm
+spec:
+  selector:
+    app: vllm
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      appProtocol: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  labels:
+    app: vllm
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vllm
+  strategy:
+    # A new GPU pod needs minutes to start; never drop below current capacity.
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: vllm
+      annotations:
+        proxy.istio.io/config: '{"terminationDrainDuration": "120s"}'
+        traffic.sidecar.istio.io/excludeOutboundIPRanges: 169.254.170.23/32
+    spec:
+      serviceAccountName: vllm
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 150
+      nodeSelector:
+        workload: gpu
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: vllm
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai
+          args:
+            # Weights are mirrored to S3 and synced by the init container, so pods never
+            # pull from the public internet (the mesh would block it anyway).
+            - --model=/models/llama-3.1-8b-instruct
+            - --served-model-name=meta-llama/Llama-3.1-8B-Instruct
+            - --max-model-len=8192
+            - --gpu-memory-utilization=0.90
+            - --max-num-seqs=128
+            - --disable-log-requests
+          ports:
+            - name: http
+              containerPort: 8000
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 15
+            failureThreshold: 4
+          resources:
+            requests: { cpu: "4", memory: 24Gi, nvidia.com/gpu: "1" }
+            limits: { memory: 24Gi, nvidia.com/gpu: "1" }
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+            - name: shm
+              mountPath: /dev/shm
+      initContainers:
+        - name: fetch-weights
+          image: public.ecr.aws/aws-cli/aws-cli:2.27.50
+          args: ["s3", "sync", "s3://acme-llmgw-models/llama-3.1-8b-instruct/", "/models/llama-3.1-8b-instruct/"]
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      volumes:
+        - name: models
+          emptyDir:
+            sizeLimit: 40Gi
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vllm
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: vllm
+---
+# Fail fast instead of queueing: when vLLM is full, Envoy answers 503 at once and the
+# gateway falls back to Bedrock for aliases that allow it.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: vllm
+spec:
+  host: vllm.slm.svc.cluster.local
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+    connectionPool:
+      http:
+        http1MaxPendingRequests: 16
+        http2MaxRequests: 256
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: vllm
+spec:
+  selector:
+    matchLabels:
+      app: vllm
+  mtls:
+    mode: STRICT
+---
+# Only the gateway's API and worker identities may call the model.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: vllm
+spec:
+  selector:
+    matchLabels:
+      app: vllm
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/llm-gateway/sa/llm-gateway-api
+              - cluster.local/ns/llm-gateway/sa/llm-gateway-worker
+      to:
+        - operation:
+            paths: ["/v1/*"]

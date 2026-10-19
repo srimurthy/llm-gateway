@@ -1,0 +1,83 @@
+# Azure OpenAI is the only destination outside AWS. Its traffic leaves through the egress
+# gateway (one auditable exit, one place to cut it off) and then the NAT gateways, whose
+# IPs are the only ones Azure accepts. TLS passes through end to end: the app talks TLS to
+# Azure, and the egress gateway routes on SNI.
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: azure-openai
+  namespace: istio-egress
+spec:
+  hosts:
+    - acme-llmgw-eastus2.openai.azure.com
+    - acme-llmgw-swedencentral.openai.azure.com
+  ports:
+    - number: 443
+      name: tls
+      protocol: TLS
+  resolution: DNS
+  location: MESH_EXTERNAL
+---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: azure-openai
+  namespace: istio-egress
+spec:
+  selector:
+    istio: egressgateway
+  servers:
+    - port:
+        number: 443
+        name: tls
+        protocol: TLS
+      hosts:
+        - acme-llmgw-eastus2.openai.azure.com
+        - acme-llmgw-swedencentral.openai.azure.com
+      tls:
+        mode: PASSTHROUGH
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: azure-openai-via-egress
+  namespace: istio-egress
+spec:
+  hosts:
+    - acme-llmgw-eastus2.openai.azure.com
+    - acme-llmgw-swedencentral.openai.azure.com
+  gateways:
+    - mesh
+    - azure-openai
+  tls:
+    # Sidecars send Azure traffic to the egress gateway...
+    - match:
+        - gateways: [mesh]
+          port: 443
+          sniHosts:
+            - acme-llmgw-eastus2.openai.azure.com
+            - acme-llmgw-swedencentral.openai.azure.com
+      route:
+        - destination:
+            host: istio-egressgateway.istio-egress.svc.cluster.local
+            port:
+              number: 443
+    # ...which forwards each host to Azure.
+    - match:
+        - gateways: [azure-openai]
+          port: 443
+          sniHosts: [acme-llmgw-eastus2.openai.azure.com]
+      route:
+        - destination:
+            host: acme-llmgw-eastus2.openai.azure.com
+            port:
+              number: 443
+    - match:
+        - gateways: [azure-openai]
+          port: 443
+          sniHosts: [acme-llmgw-swedencentral.openai.azure.com]
+      route:
+        - destination:
+            host: acme-llmgw-swedencentral.openai.azure.com
+            port:
+              number: 443

@@ -1,0 +1,60 @@
+# L2: requests per minute per tenant, shared by every ingress pod in the region through
+# the ratelimit service (deploy/ratelimit). The filter runs after JWT verification, so the
+# x-tenant-id header it reads is the verified claim.
+#
+# Fails open (failure_mode_deny: false): if the ratelimit service is down, requests pass
+# and L1 plus the gateway's own token budgets (L3) still apply.
+#
+# Keyed on tenant only. The model alias is in the JSON body, which Envoy does not parse
+# here; per-alias limits are enforced in tokens by the gateway (L3).
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: ingress-global-ratelimit
+  namespace: istio-ingress
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+            domain: llm-gateway
+            failure_mode_deny: false
+            timeout: 25ms
+            enable_x_ratelimit_headers: DRAFT_VERSION_03
+            rate_limit_service:
+              transport_api_version: V3
+              grpc_service:
+                envoy_grpc:
+                  cluster_name: outbound|8081||ratelimit.ratelimit.svc.cluster.local
+                  authority: ratelimit.ratelimit.svc.cluster.local
+    - applyTo: VIRTUAL_HOST
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            name: api.llm.acme.com:443
+            route:
+              action: ANY
+      patch:
+        operation: MERGE
+        value:
+          rate_limits:
+            - actions:
+                - request_headers:
+                    header_name: x-tenant-id
+                    descriptor_key: tenant

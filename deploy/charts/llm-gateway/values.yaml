@@ -1,0 +1,140 @@
+# Defaults shared by every region. Region files (values-<region>.yaml) override the
+# endpoints that Terraform outputs; CI sets image.digest.
+
+image:
+  repository: 111122223333.dkr.ecr.us-east-1.amazonaws.com/llm-gateway
+  # Deploy by digest. The tag is informational.
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+
+environment: prod
+region: us-east-1
+logLevel: INFO
+
+# Header written by the Istio ingress gateway from the JWT `tenant` claim.
+tenantHeader: x-tenant-id
+
+valkey:
+  # host:port, from Terraform output foundation.valkey_endpoint.
+  endpoint: ""
+  clusterMode: true
+  # Kubernetes Secret (key: password) synced by External Secrets from authSecretId,
+  # the Secrets Manager secret in Terraform output foundation.valkey_auth_secret_arn.
+  authSecretName: valkey-auth
+  authSecretId: ""
+  timeoutSeconds: 0.1
+
+dynamodb:
+  tenantsTable: llmgw-prod-tenants
+  usageTable: llmgw-prod-usage
+  jobsTable: llmgw-prod-jobs
+
+# From Terraform output foundation.jobs_queue_url. Empty disables async jobs.
+jobsQueueUrl: ""
+
+# Fraction of each tenant's tokens-per-minute this region may spend. See ADR 0003.
+regionQuotaShare: 1.0
+# Fraction each pod may spend alone while Valkey is down.
+localFallbackFraction: 0.1
+
+otel:
+  enabled: false
+  endpoint: http://adot-collector.observability.svc.cluster.local:4317
+
+istio:
+  host: api.llm.acme.com
+  gateway: istio-ingress/llm-gateway
+  ingressPrincipal: cluster.local/ns/istio-ingress/sa/istio-ingressgateway
+  # Longest a single request may run, streams included.
+  requestTimeout: 300s
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+api:
+  serviceAccountName: llm-gateway-api
+  replicas: 3
+  # Streams drain for up to shutdownTimeoutSeconds; the pod gets a little longer.
+  shutdownTimeoutSeconds: 300
+  terminationGracePeriodSeconds: 330
+  resources:
+    requests: { cpu: "1", memory: 1Gi }
+    limits: { memory: 2Gi }
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 40
+    targetCPUUtilizationPercentage: 70
+    # Requires prometheus-adapter exposing llmgw_active_streams as a Pods metric.
+    activeStreams:
+      enabled: false
+      targetAverageValue: "150"
+  podDisruptionBudget:
+    maxUnavailable: 1
+
+worker:
+  enabled: true
+  serviceAccountName: llm-gateway-worker
+  replicas: 2
+  concurrency: 16
+  terminationGracePeriodSeconds: 330
+  resources:
+    requests: { cpu: 500m, memory: 512Mi }
+    limits: { memory: 1Gi }
+  podDisruptionBudget:
+    maxUnavailable: 1
+
+# Rendered into a ConfigMap and mounted at /etc/llm-gateway/routing.yaml.
+# Schema: app/src/llm_gateway/config/routing.py. Example: app/config/routing.example.yaml.
+routing:
+  providers:
+    bedrock-nova-pro:
+      type: bedrock
+      model_id: us.amazon.nova-pro-v1:0
+    vllm-llama-8b:
+      type: openai_compatible
+      base_url: http://vllm.slm.svc.cluster.local:8000/v1
+      model: meta-llama/Llama-3.1-8B-Instruct
+      connect_timeout_s: 1
+      read_timeout_s: 60
+      circuit_breaker: { failure_threshold: 3, reset_timeout_s: 15 }
+    azure-gpt4o-eastus2:
+      type: azure_openai
+      endpoint: https://acme-llmgw-eastus2.openai.azure.com
+      deployment: gpt-4o
+      api_version: "2024-10-21"
+      api_key_secret: llmgw-prod/azure-openai/eastus2
+    azure-gpt4o-swedencentral:
+      type: azure_openai
+      endpoint: https://acme-llmgw-swedencentral.openai.azure.com
+      deployment: gpt-4o
+      api_version: "2024-10-21"
+      api_key_secret: llmgw-prod/azure-openai/swedencentral
+  aliases:
+    smart:
+      description: Highest quality. Bedrock first, then Azure in two regions.
+      chain: [bedrock-nova-pro, azure-gpt4o-eastus2, azure-gpt4o-swedencentral]
+      max_output_tokens: 4096
+    fast:
+      description: Low latency. Self-hosted first, Bedrock on overflow.
+      chain: [vllm-llama-8b, bedrock-nova-pro]
+      max_output_tokens: 2048
+    private:
+      description: Data never leaves the VPC. No fallback, by design.
+      chain: [vllm-llama-8b]
+      max_output_tokens: 2048
+  default_tenant_policy:
+    tokens_per_minute: 200000
+    allowed_aliases: [fast, private, smart]

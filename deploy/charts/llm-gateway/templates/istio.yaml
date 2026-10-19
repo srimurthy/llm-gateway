@@ -1,0 +1,103 @@
+# Routing from the ingress gateway, and who may call the pods.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ include "llm-gateway.name" . }}
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ .Values.istio.host | quote }}
+  gateways:
+    - {{ .Values.istio.gateway }}
+  http:
+    - name: api
+      match:
+        - uri:
+            prefix: /v1/
+      route:
+        - destination:
+            host: {{ include "llm-gateway.name" . }}.{{ .Release.Namespace }}.svc.cluster.local
+            port:
+              number: 80
+      timeout: {{ .Values.istio.requestTimeout }}
+      # Chat completions are not idempotent: retry only when the request never reached a pod.
+      retries:
+        attempts: 2
+        retryOn: connect-failure,refused-stream
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: {{ include "llm-gateway.name" . }}
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  host: {{ include "llm-gateway.name" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  trafficPolicy:
+    # Streams have very uneven durations; send each request to the least busy pod.
+    loadBalancer:
+      simple: LEAST_REQUEST
+    connectionPool:
+      http:
+        idleTimeout: 3600s
+    # The gateway returns 429/503 on purpose when providers are saturated, so only
+    # connection-level failures may eject a pod.
+    outlierDetection:
+      splitExternalLocalOriginErrors: true
+      consecutiveLocalOriginFailures: 5
+      consecutive5xxErrors: 0
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 34
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ include "llm-gateway.name" . }}
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selector" . | nindent 6 }}
+  mtls:
+    mode: STRICT
+---
+# Only the ingress gateway may call the API. The tenant header is trustworthy because of
+# this rule: no other workload can reach the pods to set it.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "llm-gateway.name" . }}-api
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selector" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - {{ .Values.istio.ingressPrincipal | quote }}
+      to:
+        - operation:
+            paths: ["/v1/*"]
+---
+# The worker serves nothing; deny all inbound mesh traffic to it.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "llm-gateway.name" . }}-worker
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selector" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  action: ALLOW
+  rules: []

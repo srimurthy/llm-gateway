@@ -1,0 +1,44 @@
+# Callers present a JWT from the corporate identity provider. The ingress gateway:
+#   1. rejects invalid tokens (RequestAuthentication),
+#   2. rejects requests without a token or without a `tenant` claim (AuthorizationPolicy),
+#   3. writes the verified claim to x-tenant-id, replacing any value the client sent.
+# The rate limits (L2) and the gateway pods (L3) key on that header.
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: corporate-jwt
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  jwtRules:
+    - issuer: https://login.corp.example.com/
+      jwksUri: https://login.corp.example.com/.well-known/jwks.json
+      audiences:
+        - llm-gateway
+      forwardOriginalToken: false
+      outputClaimToHeaders:
+        - header: x-tenant-id
+          claim: tenant
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: require-tenant-jwt
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            requestPrincipals: ["*"]
+      to:
+        - operation:
+            hosts: ["api.llm.acme.com"]
+      when:
+        - key: request.auth.claims[tenant]
+          values: ["*"]

@@ -1,0 +1,7 @@
+# Cluster-wide resources that need the CRDs Terraform installed: the secret store and the
+# Karpenter node pools. Region overlays fill in cluster-specific names.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - cluster-secret-store.yaml
+  - karpenter.yaml

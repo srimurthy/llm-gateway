@@ -1,0 +1,33 @@
+# The mesh runs with outboundTrafficPolicy REGISTRY_ONLY, so every external destination
+# must be registered. AWS APIs resolve to VPC interface endpoints (private DNS), so this
+# traffic never leaves the VPC; it bypasses the egress gateway on purpose.
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: aws-apis
+  namespace: istio-system
+spec:
+  hosts:
+    - "*.amazonaws.com"
+  ports:
+    - number: 443
+      name: tls
+      protocol: TLS
+  resolution: NONE
+  location: MESH_EXTERNAL
+---
+# ElastiCache (Valkey) over TLS, used by the gateway pods and the ratelimit service.
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: elasticache
+  namespace: istio-system
+spec:
+  hosts:
+    - "*.cache.amazonaws.com"
+  ports:
+    - number: 6379
+      name: tls-valkey
+      protocol: TLS
+  resolution: NONE
+  location: MESH_EXTERNAL

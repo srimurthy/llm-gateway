@@ -1,0 +1,150 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ratelimit
+  labels:
+    app: ratelimit
+spec:
+  selector:
+    app: ratelimit
+  ports:
+    - name: grpc
+      port: 8081
+      targetPort: grpc
+      appProtocol: grpc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ratelimit
+  labels:
+    app: ratelimit
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ratelimit
+  template:
+    metadata:
+      labels:
+        app: ratelimit
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "6070"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: ratelimit
+      containers:
+        - name: ratelimit
+          image: envoyproxy/ratelimit
+          command: ["/bin/ratelimit"]
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: grpc
+              containerPort: 8081
+            - name: debug
+              containerPort: 6070
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: LOG_FORMAT
+              value: json
+            - name: USE_STATSD
+              value: "false"
+            - name: USE_PROMETHEUS
+              value: "true"
+            - name: REDIS_SOCKET_TYPE
+              value: tcp
+            - name: REDIS_TYPE
+              value: cluster
+            - name: REDIS_TLS
+              value: "true"
+            - name: REDIS_URL
+              value: VALKEY_ENDPOINT_SET_BY_OVERLAY
+            - name: REDIS_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: valkey-auth
+                  key: password
+            - name: RUNTIME_ROOT
+              value: /data
+            - name: RUNTIME_SUBDIRECTORY
+              value: ratelimit
+            - name: RUNTIME_WATCH_ROOT
+              value: "false"
+            - name: RUNTIME_IGNOREDOTFILES
+              value: "true"
+            # Small in-process cache of over-limit keys: rejects hot tenants without a
+            # round trip to Valkey.
+            - name: LOCAL_CACHE_SIZE_IN_BYTES
+              value: "1048576"
+          readinessProbe:
+            httpGet: { path: /healthcheck, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthcheck, port: http }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /data/ratelimit/config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: ratelimit-config
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ratelimit
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: ratelimit
+---
+# Only the ingress gateway may ask for rate-limit decisions.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: ratelimit
+spec:
+  selector:
+    matchLabels:
+      app: ratelimit
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/istio-ingress/sa/istio-ingressgateway"]
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: ratelimit
+spec:
+  selector:
+    matchLabels:
+      app: ratelimit
+  mtls:
+    mode: STRICT

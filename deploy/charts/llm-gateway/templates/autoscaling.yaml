@@ -1,0 +1,76 @@
+{{- with .Values.api.autoscaling }}
+{{- if .enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "llm-gateway.name" $ }}-api
+  labels:
+    {{- include "llm-gateway.labels" $ | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "llm-gateway.name" $ }}-api
+  minReplicas: {{ .minReplicas }}
+  maxReplicas: {{ .maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .targetCPUUtilizationPercentage }}
+    {{- if .activeStreams.enabled }}
+    # LLM calls are I/O-bound: open streams track load far better than CPU.
+    - type: Pods
+      pods:
+        metric:
+          name: llmgw_active_streams
+        target:
+          type: AverageValue
+          averageValue: {{ .activeStreams.targetAverageValue | quote }}
+    {{- end }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+    scaleDown:
+      # Scale-in kills pods that hold streams; go slowly.
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 120
+{{- end }}
+{{- end }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "llm-gateway.name" . }}-api
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.api.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selector" . | nindent 6 }}
+      app.kubernetes.io/component: api
+{{- if and .Values.worker.enabled .Values.jobsQueueUrl }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "llm-gateway.name" . }}-worker
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.worker.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selector" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+{{- end }}

@@ -1,0 +1,28 @@
+# Local development: the gateway with mock providers, backed by a real Valkey.
+#   docker compose up --build
+name: llm-gateway
+
+services:
+  valkey:
+    image: valkey/valkey:8.0-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+
+  gateway:
+    build: ./app
+    depends_on:
+      valkey:
+        condition: service_healthy
+    ports: ["8080:8080"]
+    environment:
+      LLMGW_ENVIRONMENT: local
+      LLMGW_LOG_FORMAT: console
+      LLMGW_VALKEY_URL: redis://valkey:6379/0
+      LLMGW_ROUTING_CONFIG_PATH: /app/config/routing.local.yaml
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]

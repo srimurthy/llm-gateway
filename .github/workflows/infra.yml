@@ -1,0 +1,88 @@
+name: infra
+
+on:
+  pull_request:
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+  push:
+    branches: [main]
+    paths: ["infra/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: false # never cancel a Terraform run halfway
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.x
+      - name: Format
+        run: terraform fmt -check -recursive infra
+      - uses: terraform-linters/setup-tflint@v4
+      - name: Lint
+        working-directory: infra
+        run: |
+          tflint --init --config "$PWD/.tflint.hcl"
+          tflint --recursive --config "$PWD/.tflint.hcl" --format compact
+      - name: Validate every root
+        working-directory: infra
+        run: |
+          # Roots exercise every module, including ones with aliased providers that
+          # cannot be validated on their own.
+          for root in $(find live -name backend.tf -exec dirname {} \; | sort); do
+            echo "::group::$root"
+            terraform -chdir="$root" init -backend=false -input=false
+            terraform -chdir="$root" validate
+            echo "::endgroup::"
+          done
+      - name: Misconfiguration scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: infra
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+  # Plans need the private EKS API and the state bucket: run on a runner inside the
+  # corporate network, with a read-only role. Applies happen from the same runner after
+  # review, in the order documented in infra/README.md.
+  plan:
+    needs: static
+    if: github.event_name == 'pull_request'
+    runs-on: [self-hosted, corp-network]
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        root:
+          - live/prod/global
+          - live/prod/us-east-1/foundation
+          - live/prod/us-west-2/foundation
+          - live/prod/us-east-1/platform
+          - live/prod/us-west-2/platform
+          - live/prod/dns
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.x
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::111122223333:role/ci-terraform-plan
+          aws-region: us-east-1
+      - name: Plan
+        working-directory: infra/${{ matrix.root }}
+        run: |
+          terraform init -input=false -backend-config="bucket=acme-llm-gateway-tfstate-111122223333"
+          terraform plan -input=false -lock=false -no-color -out=tfplan

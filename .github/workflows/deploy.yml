@@ -1,0 +1,49 @@
+name: deploy-manifests
+
+on:
+  pull_request:
+    paths: ["deploy/**", ".github/workflows/deploy.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint chart
+        run: |
+          for region in us-east-1 us-west-2; do
+            helm lint deploy/charts/llm-gateway -f deploy/charts/llm-gateway/values-$region.yaml \
+              --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
+          done
+      - name: Render everything
+        run: |
+          mkdir -p rendered
+          for region in us-east-1 us-west-2; do
+            helm template llm-gateway deploy/charts/llm-gateway -n llm-gateway \
+              -f deploy/charts/llm-gateway/values-$region.yaml \
+              --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+              > rendered/gateway-$region.yaml
+            kubectl kustomize deploy/ratelimit/overlays/$region > rendered/ratelimit-$region.yaml
+            kubectl kustomize deploy/platform/overlays/$region > rendered/platform-$region.yaml
+          done
+          kubectl kustomize deploy/istio > rendered/istio.yaml
+          kubectl kustomize deploy/slm > rendered/slm.yaml
+      - name: Validate schemas (including Istio, Karpenter and External Secrets CRDs)
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          ./kubeconform -strict -summary -kubernetes-version 1.33.0 \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            rendered/
+      - name: Misconfiguration scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: rendered
+          severity: CRITICAL,HIGH
+          exit-code: "1"

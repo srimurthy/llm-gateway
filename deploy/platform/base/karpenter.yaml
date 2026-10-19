@@ -1,0 +1,120 @@
+# Node classes and pools. Subnets and security groups are discovered by the
+# karpenter.sh/discovery tag that Terraform sets to the cluster name.
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: general
+spec:
+  role: ROLE_SET_BY_OVERLAY
+  amiSelectorTerms:
+    # Pin the version in production and roll it forward deliberately.
+    - alias: al2023@latest
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: CLUSTER_SET_BY_OVERLAY
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: CLUSTER_SET_BY_OVERLAY
+  metadataOptions:
+    httpEndpoint: enabled
+    httpTokens: required
+    httpPutResponseHopLimit: 1
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 50Gi
+        volumeType: gp3
+        encrypted: true
+---
+# GPU nodes run Bottlerocket's NVIDIA variant, which ships the driver and device plugin.
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: gpu
+spec:
+  role: ROLE_SET_BY_OVERLAY
+  amiSelectorTerms:
+    - alias: bottlerocket@latest
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: CLUSTER_SET_BY_OVERLAY
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: CLUSTER_SET_BY_OVERLAY
+  metadataOptions:
+    httpEndpoint: enabled
+    httpTokens: required
+    httpPutResponseHopLimit: 1
+  blockDeviceMappings:
+    - deviceName: /dev/xvdb
+      ebs:
+        volumeSize: 200Gi # model weights cache
+        volumeType: gp3
+        encrypted: true
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: general
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: general
+      requirements:
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values: [c, m, r]
+        - key: karpenter.k8s.aws/instance-generation
+          operator: Gt
+          values: ["5"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: [amd64]
+        # The gateway holds long streams; spot interruptions would cut them. On-demand only.
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: [on-demand]
+      expireAfter: 720h
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 10m
+    budgets:
+      - nodes: "10%"
+  limits:
+    cpu: "1000"
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: gpu
+spec:
+  template:
+    metadata:
+      labels:
+        workload: gpu
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: gpu
+      taints:
+        - key: nvidia.com/gpu
+          value: "true"
+          effect: NoSchedule
+      requirements:
+        - key: karpenter.k8s.aws/instance-family
+          operator: In
+          values: [g6, g6e]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: [on-demand]
+      expireAfter: 720h
+  disruption:
+    # GPU nodes are slow to replace (model download, warm-up): only remove empty ones.
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 30m
+  limits:
+    nvidia.com/gpu: "16"

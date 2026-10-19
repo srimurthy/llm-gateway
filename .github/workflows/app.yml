@@ -1,0 +1,124 @@
+name: app
+
+on:
+  pull_request:
+    paths: ["app/**", "deploy/charts/**", ".github/workflows/app.yml"]
+  push:
+    branches: [main]
+    paths: ["app/**", ".github/workflows/app.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: app/uv.lock
+      - run: uv sync --frozen
+      - name: Lint
+        run: uv run ruff check --output-format github .
+      - name: Format
+        run: uv run ruff format --check .
+      - name: Types
+        run: uv run mypy
+      - name: Tests
+        run: uv run pytest --cov --cov-report=xml --junitxml=junit.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: |
+            app/coverage.xml
+            app/junit.xml
+
+  image:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # OIDC to AWS; no long-lived keys
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    env:
+      REGISTRY: 111122223333.dkr.ecr.us-east-1.amazonaws.com
+      IMAGE: llm-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (no push) for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          load: true
+          tags: ${{ env.IMAGE }}:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Scan image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}:scan
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: AWS credentials
+        if: github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::111122223333:role/ci-image-publisher
+          aws-region: us-east-1
+      - name: ECR login
+        if: github.event_name == 'push'
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Push
+        id: build
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: true
+          provenance: true
+          sbom: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+
+  # GitOps: propose the new digest; Argo CD rolls it out once the PR merges.
+  release:
+    needs: image
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin the new digest in every region
+        env:
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          for file in deploy/argocd/*/applications.yaml; do
+            sed -i -E "s|digest: sha256:[0-9a-f]{64}|digest: ${DIGEST}|" "$file"
+          done
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: release/llm-gateway-${{ github.sha }}
+          title: "Release llm-gateway ${{ github.sha }}"
+          body: "Pins image digest `${{ needs.image.outputs.digest }}` in both regions."
+          commit-message: "Release llm-gateway ${{ github.sha }}"

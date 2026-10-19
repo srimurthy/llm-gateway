@@ -1,0 +1,73 @@
+{{- if and .Values.worker.enabled .Values.jobsQueueUrl }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-gateway.name" . }}-worker
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selector" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "llm-gateway.selector" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        {{- include "llm-gateway.podAnnotations" . | nindent 8 }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        proxy.istio.io/config: '{"terminationDrainDuration": "300s"}'
+    spec:
+      serviceAccountName: {{ .Values.worker.serviceAccountName }}
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "llm-gateway.selector" . | nindent 14 }}
+              app.kubernetes.io/component: worker
+      containers:
+        - name: worker
+          image: {{ include "llm-gateway.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["llm-gateway-worker"]
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            {{- include "llm-gateway.env" . | nindent 12 }}
+            - name: LLMGW_WORKER_CONCURRENCY
+              value: {{ .Values.worker.concurrency | quote }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          livenessProbe:
+            httpGet: { path: /metrics, port: metrics }
+            periodSeconds: 15
+            failureThreshold: 3
+          volumeMounts:
+            - name: routing
+              mountPath: /etc/llm-gateway
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: routing
+          configMap:
+            name: {{ include "llm-gateway.name" . }}-routing
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+{{- end }}

@@ -1,0 +1,21 @@
+# Local development: mock providers only, no cloud credentials needed.
+# Used by docker compose (see ../compose.yaml).
+providers:
+  mock-primary:
+    type: mock
+    chunk_delay_s: 0.02
+  mock-secondary:
+    type: mock
+
+aliases:
+  fast:
+    description: Echo model for local development.
+    chain: [mock-primary, mock-secondary]
+    max_output_tokens: 1024
+  private:
+    description: Echo model standing in for the self-hosted SLM.
+    chain: [mock-primary]
+    max_output_tokens: 512
+
+default_tenant_policy:
+  tokens_per_minute: 100000

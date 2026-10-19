@@ -1,0 +1,4 @@
+# Set by Terraform (modules/platform/ingress.tf).
+targetGroupArn: ""
+serviceName: istio-ingressgateway
+servicePort: 443

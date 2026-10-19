@@ -1,0 +1,6 @@
+# Values from `terraform output` in infra/live/prod/us-east-1/foundation.
+region: us-east-1
+valkey:
+  endpoint: clustercfg.llmgw-prod-use1.abc123.use1.cache.amazonaws.com:6379
+  authSecretId: llmgw-prod-use1/valkey-auth
+jobsQueueUrl: https://sqs.us-east-1.amazonaws.com/111122223333/llmgw-prod-use1-jobs

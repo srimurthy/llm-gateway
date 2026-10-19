@@ -1,0 +1,23 @@
+# L2 request limits. The descriptor comes from ratelimit-global.yaml: tenant only.
+# Most specific match wins, so a tenant listed by value overrides the default.
+domain: llm-gateway
+descriptors:
+  # Default for every tenant: 600 requests per minute per region.
+  - key: tenant
+    rate_limit:
+      unit: minute
+      requests_per_unit: 600
+
+  # Batch-heavy tenant: push it toward the async API.
+  - key: tenant
+    value: team-batch-analytics
+    rate_limit:
+      unit: minute
+      requests_per_unit: 60
+
+  # Customer-facing assistant: higher ceiling.
+  - key: tenant
+    value: team-support-assistant
+    rate_limit:
+      unit: minute
+      requests_per_unit: 3000

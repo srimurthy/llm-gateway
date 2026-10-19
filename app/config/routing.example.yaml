@@ -1,0 +1,60 @@
+# Production-shaped routing file. The Helm chart renders this into a ConfigMap
+# (deploy/charts/llm-gateway/values.yaml, key `routing`), one per region.
+#
+# Replace model IDs, endpoints and deployment names with the ones enabled in your
+# accounts. Clients only ever see alias names; provider names are internal.
+
+providers:
+  bedrock-nova-pro:
+    type: bedrock
+    # Cross-region inference profile: Bedrock spreads load across US regions itself.
+    model_id: us.amazon.nova-pro-v1:0
+    read_timeout_s: 120
+    circuit_breaker:
+      failure_threshold: 5
+      reset_timeout_s: 30
+
+  azure-gpt4o-eastus2:
+    type: azure_openai
+    endpoint: https://contoso-llmgw-eastus2.openai.azure.com
+    deployment: gpt-4o
+    api_version: "2024-10-21"
+    api_key_secret: llm-gateway/azure-openai/eastus2
+    read_timeout_s: 120
+
+  azure-gpt4o-swedencentral:
+    type: azure_openai
+    endpoint: https://contoso-llmgw-swedencentral.openai.azure.com
+    deployment: gpt-4o
+    api_version: "2024-10-21"
+    api_key_secret: llm-gateway/azure-openai/swedencentral
+    read_timeout_s: 120
+
+  vllm-llama-8b:
+    type: openai_compatible
+    base_url: http://vllm.slm.svc.cluster.local:8000/v1
+    model: meta-llama/Llama-3.1-8B-Instruct
+    connect_timeout_s: 1
+    read_timeout_s: 60
+    circuit_breaker:
+      failure_threshold: 3
+      reset_timeout_s: 15
+
+aliases:
+  smart:
+    description: Highest quality. Bedrock first, then Azure in two regions.
+    chain: [bedrock-nova-pro, azure-gpt4o-eastus2, azure-gpt4o-swedencentral]
+    max_output_tokens: 4096
+  fast:
+    description: Low latency and cost. Self-hosted first, Bedrock on overflow.
+    chain: [vllm-llama-8b, bedrock-nova-pro]
+    max_output_tokens: 2048
+  private:
+    description: Data never leaves the VPC. No fallback outside the cluster, by design.
+    chain: [vllm-llama-8b]
+    max_output_tokens: 2048
+
+# Applies to tenants without a row in the tenants table.
+default_tenant_policy:
+  tokens_per_minute: 200000
+  allowed_aliases: [fast, private, smart]

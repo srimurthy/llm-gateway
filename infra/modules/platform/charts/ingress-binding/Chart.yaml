@@ -1,0 +1,5 @@
+apiVersion: v2
+name: ingress-binding
+description: Binds the Istio ingress gateway pods to the Terraform-owned NLB target group.
+type: application
+version: 0.1.0

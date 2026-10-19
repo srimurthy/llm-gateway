@@ -1,0 +1,144 @@
+# Bootstrap once per cluster: kubectl apply -f deploy/argocd/us-east-1/
+# Sync waves order the rollout: platform resources, mesh edge, ratelimit, model, gateway.
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/acme/llm-gateway.git
+    targetRevision: main
+    path: deploy/platform/overlays/us-east-1
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: istio-edge
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/acme/llm-gateway.git
+    targetRevision: main
+    path: deploy/istio
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: istio-ingress
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ratelimit
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/acme/llm-gateway.git
+    targetRevision: main
+    path: deploy/ratelimit/overlays/us-east-1
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ratelimit
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: slm
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/acme/llm-gateway.git
+    targetRevision: main
+    path: deploy/slm
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: slm
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: llm-gateway
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/acme/llm-gateway.git
+    targetRevision: main
+    path: deploy/charts/llm-gateway
+    helm:
+      releaseName: llm-gateway
+      valueFiles:
+        - values.yaml
+        - values-us-east-1.yaml
+      # CI writes the image digest here on each release (see .github/workflows/app.yml).
+      valuesObject:
+        image:
+          digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: llm-gateway
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    managedNamespaceMetadata:
+      labels:
+        istio-injection: enabled

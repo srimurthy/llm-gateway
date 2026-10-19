@@ -1,0 +1,10 @@
+# Mesh-edge configuration, identical in both regions. Applied by Argo CD.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gateway.yaml
+  - authentication.yaml
+  - ratelimit-local.yaml
+  - ratelimit-global.yaml
+  - egress-azure.yaml
+  - egress-aws.yaml

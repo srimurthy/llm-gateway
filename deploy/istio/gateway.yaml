@@ -1,0 +1,43 @@
+# Second TLS hop. The internal ALB terminates the client's TLS (ACM certificate) and
+# re-encrypts to this listener, so traffic stays encrypted inside the VPC. This cert is
+# from the corporate CA (Secrets Manager -> External Secrets); the ALB does not verify it.
+# The ALB sends no SNI to its targets, so the server matches any host; VirtualServices
+# and the AuthorizationPolicy still pin the real hostname.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: llm-gateway
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      hosts:
+        - "*"
+      tls:
+        mode: SIMPLE
+        credentialName: llm-gateway-tls
+        minProtocolVersion: TLSV1_2
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: llm-gateway-tls
+  namespace: istio-ingress
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: aws-secrets-manager
+  target:
+    name: llm-gateway-tls
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/tls
+  dataFrom:
+    - extract:
+        key: llmgw-prod/ingress-tls

@@ -1,0 +1,29 @@
+# Values from `terraform output` in infra/live/prod/us-west-2/foundation.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ratelimit
+      spec:
+        template:
+          spec:
+            containers:
+              - name: ratelimit
+                env:
+                  - name: REDIS_URL
+                    value: clustercfg.llmgw-prod-usw2.def456.usw2.cache.amazonaws.com:6379
+  - patch: |-
+      apiVersion: external-secrets.io/v1
+      kind: ExternalSecret
+      metadata:
+        name: valkey-auth
+      spec:
+        data:
+          - secretKey: password
+            remoteRef:
+              key: llmgw-prod-usw2/valkey-auth

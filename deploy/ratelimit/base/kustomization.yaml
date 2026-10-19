@@ -1,0 +1,18 @@
+# Envoy's reference global rate-limit service (L2), backed by the regional Valkey.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ratelimit
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - external-secret.yaml
+configMapGenerator:
+  - name: ratelimit-config
+    files:
+      - config.yaml
+images:
+  # Upstream publishes commit-SHA tags only. Pin to a SHA (or digest) your pipeline has
+  # scanned and mirrored to ECR; the build fails until this is set.
+  - name: envoyproxy/ratelimit
+    newName: 111122223333.dkr.ecr.us-east-1.amazonaws.com/mirror/envoyproxy-ratelimit
+    newTag: REPLACE_WITH_SCANNED_COMMIT_SHA
